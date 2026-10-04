@@ -83,6 +83,24 @@
       </div>
       <div id="version-list" class="version-list"></div>
     </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>实测曝光核验</h2>
+        <button class="btn small" id="btn-add-vrec">＋ 记录</button>
+      </div>
+      <label>核验版本
+        <select id="verify-version"><option value="">— 请选择已保存版本 —</option></select>
+      </label>
+      <div class="row-list" id="verify-rows"></div>
+      <button class="btn primary" id="btn-verify" style="width:100%;margin-top:8px">开始核验</button>
+      <div class="hint" id="verify-hint">
+        选择版本后，逐条录入目标实际观测时段（UTC 整分钟起止，左闭右开）。
+        同一目标重叠记录只计一次；不同目标相撞部分双方扣除；
+        再剔除与固定校准重叠及落在自身可行窗口外的分钟。
+        核验只读，不会改动已保存的版本。
+      </div>
+    </section>
   </aside>
 
   <!-- ============================ 右侧：结果区 ============================ -->
@@ -132,6 +150,22 @@
       <div class="table-wrap">
         <table id="cal-table">
           <thead><tr><th>名称</th><th>开始 (UTC)</th><th>结束 (UTC)</th><th>时长(分)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="verify-card" hidden>
+      <h2>实测曝光核验结果</h2>
+      <div id="verify-summary" class="hint" style="margin:0 0 8px"></div>
+      <div class="table-wrap">
+        <table id="verify-table">
+          <thead>
+            <tr>
+              <th>目标</th><th>原定(分)</th><th>实测(分)</th><th>有效(分)</th>
+              <th>状态</th><th>被剔除区间及原因</th>
+            </tr>
+          </thead>
           <tbody></tbody>
         </table>
       </div>

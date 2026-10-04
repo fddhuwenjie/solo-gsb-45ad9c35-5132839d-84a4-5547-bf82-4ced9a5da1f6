@@ -3,7 +3,8 @@
 输入观测点经纬度、UTC 日期范围和带赤经/赤纬/曝光时长/优先级的观测目标，
 系统按球面天文公式**逐分钟**求解每个目标的可行观测区间，自动排出**互不重叠**的
 观测序列，并保留**固定校准时段**不被占用；对未能安排的目标给出**首个冲突原因**。
-时间线色块可直接**拖动调整**并即时重算，支持**保存版本**（SQLite）与**导出时间表 JSON**。
+时间线色块可直接**拖动调整**并即时重算，支持**保存版本**（SQLite）与**导出时间表 JSON**；
+观测执行后还能对已保存版本做**实测曝光核验**，逐目标核算有效分钟是否达到原定曝光时长。
 
 后端：Python + Flask + SQLite + NumPy（仅用于逐分钟向量运算）
 前端：原生 HTML / CSS / JavaScript（SVG 时间线，零前端构建、零 CDN 依赖）
@@ -97,6 +98,30 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 - **导出 JSON**：下载自描述文件 `observation-schedule-YYYY-MM-DD.json`，
   顶层结构为 `{schema, generated_at, request, schedule}`，便于与其他系统对接。
 
+### 7. 实测曝光核验
+
+观测执行后，可对照任一**已保存版本**核验实际曝光是否达标（页面左侧
+「实测曝光核验」卡片）：
+
+1. **选择版本**：下拉框列出全部已存版本，选定后提示该版本的日期范围与目标数。
+2. **录入记录**：点「＋ 记录」逐条添加：目标（下拉选择，仅限版本内目标）、
+   UTC 起止时间（精确到整分钟）。
+3. 点「开始核验」，右侧结果表逐目标列出：
+   **原定曝光时长、实测分钟、有效分钟、达标状态、被剔除区间及原因**。
+
+核算规则（分钟一律**左闭右开** `[start, end)`，以版本保存的目标、可行窗口、
+校准时段与排程为准）：
+
+- 同一目标的多条记录取并集，**重叠部分只计一次** → 实测分钟；
+- **不同目标实测相撞的部分从双方各扣除**；
+- 再剔除**与固定校准重叠**、以及**落在自身可行窗口外**的分钟 → 有效分钟；
+- 有效分钟 **≥ 原定曝光时长** 即为「✅ 完成」，否则显示差额。
+
+偏离原排程但符合条件的实测同样计入；当初未排上的目标也可核验。
+核验为**只读**操作，不会改动已保存的版本。
+以下输入错误会**整批拒绝**（HTTP 400）：未知目标、非整分钟时间、
+超出版本日期范围、起止倒置。
+
 ---
 
 ## 🔭 计算方法（球面天文）
@@ -125,6 +150,7 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 | `POST` | `/api/versions` | `{label?, request}` 保存版本（服务端重算） |
 | `GET` | `/api/versions/<id>` | 取版本（含输入与结果） |
 | `DELETE` | `/api/versions/<id>` | 删除版本 |
+| `POST` | `/api/versions/<id>/verify` | 实测曝光核验（只读，见下） |
 | `GET` | `/healthz` | 健康检查 |
 
 请求示例：
@@ -152,6 +178,53 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 > `pins` 为可选的手动固定表：目标 id → 起始分钟（相对网格起点 00:00 UTC）；
 > 非法固定（越界、离开可行窗口、与其他时段重叠）会被服务端拒绝并返回 warning。
 
+#### 实测曝光核验 `POST /api/versions/<id>/verify`
+
+请求体为若干条实际观测时段（UTC 整分钟起止，左闭右开）：
+
+```json
+{
+  "records": [
+    {"target_id": "m31", "start": "2026-09-24T12:10Z", "end": "2026-09-24T13:10Z"},
+    {"target_id": "m31", "start": "2026-09-24T12:40Z", "end": "2026-09-24T13:30Z"},
+    {"target_id": "vega", "start": "2026-09-24T13:00Z", "end": "2026-09-24T13:45Z"}
+  ]
+}
+```
+
+响应（节选）：`results` 覆盖版本内全部目标（未录入记录的目标 `record_count` 为 0），
+`excluded` 逐段列出被剔除区间及原因：
+
+```json
+{
+  "version_id": "…", "version_label": "…",
+  "grid": {"start": "2026-09-24T00:00Z", "end": "2026-09-26T00:00Z"},
+  "records_accepted": 3,
+  "results": [
+    {
+      "target_id": "m31", "name": "M31",
+      "planned_minutes": 45,
+      "was_scheduled": true,
+      "scheduled": {"start": "2026-09-24T12:05Z", "end": "2026-09-24T12:50Z"},
+      "record_count": 2, "input_minutes": 110,
+      "actual_minutes": 80, "effective_minutes": 65,
+      "shortfall_minutes": 0, "complete": true,
+      "records": [{"start": "…", "end": "…", "minutes": 60}],
+      "excluded": [
+        {"start": "2026-09-24T13:00Z", "end": "2026-09-24T13:30Z",
+         "minutes": 30,
+         "reason": "与其他目标实测时段相撞（Vega），双方均扣除"}
+      ]
+    }
+  ],
+  "summary": {"targets": 3, "verified": 2, "completed": 2}
+}
+```
+
+错误：未知目标、非整分钟、超出版本日期范围、起止倒置等任一问题
+都会使**整批**记录被拒绝（`400 {"error": "…"}`）；版本不存在返回 `404`。
+核验不修改版本数据。
+
 ---
 
 ## 📁 项目结构
@@ -162,11 +235,12 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 │   ├── astronomy.py        # 儒略日/GMST/太阳历书/赤道→地平/空气质量
 │   ├── scheduling_utils.py # 坐标与时间解析、区间运算
 │   ├── planner.py          # 逐分钟窗口求解 + 贪心排程 + 冲突归因
+│   ├── verify.py           # 实测曝光核验（并集去重/相撞扣除/校准与窗口剔除）
 │   └── main.py             # Flask 路由、SQLite 版本持久化
 ├── static/
 │   ├── index.html          # 单页界面
 │   ├── style.css
-│   └── app.js              # 状态管理、SVG 时间线、拖动、API 调用
+│   └── app.js              # 状态管理、SVG 时间线、拖动、核验、API 调用
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt

@@ -8,6 +8,7 @@ const state = {
   pins: {},             // targetId -> {start_min}（手动拖放/缩放产生的固定时段）
   result: null,         // /api/compute 返回结果
   busy: false,
+  verify: { versionId: "", detail: null },  // 实测核验：选中版本及其详情
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -733,7 +734,6 @@ async function loadVersions() {
     box.innerHTML = "";
     if (!versions.length) {
       box.innerHTML = `<div class="empty-hint">暂无保存版本</div>`;
-      return;
     }
     for (const v of versions) {
       const div = document.createElement("div");
@@ -749,6 +749,7 @@ async function loadVersions() {
       div.querySelector(".v-del").addEventListener("click", () => deleteVersion(v.id));
       box.appendChild(div);
     }
+    refreshVerifyVersions(versions);
   } catch (err) {
     box.innerHTML = `<div class="empty-hint">版本加载失败：${escapeHtml(err.message)}</div>`;
   }
@@ -796,6 +797,156 @@ async function deleteVersion(id) {
   } catch (err) {
     setStatus("err", err.message);
   }
+}
+
+/* ================================================================ 实测曝光核验 */
+function refreshVerifyVersions(versions) {
+  const sel = $("#verify-version");
+  const keep = state.verify.versionId;
+  sel.innerHTML = `<option value="">— 请选择已保存版本 —</option>`;
+  for (const v of versions) {
+    const opt = document.createElement("option");
+    opt.value = v.id;
+    opt.textContent = `${v.label}（${v.created_at.slice(5, 16).replace("T", " ")}）`;
+    sel.appendChild(opt);
+  }
+  if (keep && versions.some((v) => v.id === keep)) {
+    sel.value = keep;
+  } else if (keep) {
+    // 当前核验版本已被删除 -> 清空核验区
+    state.verify = { versionId: "", detail: null };
+    sel.value = "";
+    $("#verify-rows").innerHTML = "";
+    $("#verify-card").hidden = true;
+  }
+}
+
+async function onVerifyVersionChange() {
+  const vid = $("#verify-version").value;
+  state.verify = { versionId: vid, detail: null };
+  $("#verify-rows").innerHTML = "";
+  $("#verify-card").hidden = true;
+  if (!vid) return;
+  try {
+    const detail = await api(`/api/versions/${vid}`);
+    state.verify.detail = detail;
+    $("#verify-hint").textContent =
+      `版本「${detail.label}」日期范围 ${detail.result.grid.start.replace("T", " ").replace("Z", "")} – ` +
+      `${detail.result.grid.end.replace("T", " ").replace("Z", "")} UTC，含 ` +
+      `${detail.result.targets.length} 个目标。时段须为整分钟且落在该范围内。`;
+    addVerifyRow();
+  } catch (err) {
+    setStatus("err", err.message);
+  }
+}
+
+function addVerifyRow(rec) {
+  const detail = state.verify.detail;
+  if (!detail) {
+    setStatus("err", "请先选择要核验的版本");
+    return;
+  }
+  rec = rec || { target_id: "", start: "", end: "" };
+  const targets = detail.result.targets;
+  const row = document.createElement("div");
+  row.className = "verify-row";
+  row.innerHTML = `
+    <div class="v-head">
+      <select class="v-target">
+        <option value="">— 目标 —</option>
+        ${targets.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join("")}
+      </select>
+      <button class="icon-btn" title="删除">✕</button>
+    </div>
+    <div class="v-grid">
+      <label>开始 (UTC)<input class="v-start" type="datetime-local" step="60" /></label>
+      <label>结束 (UTC)<input class="v-end" type="datetime-local" step="60" /></label>
+    </div>`;
+  row.querySelector(".v-target").value = rec.target_id || "";
+  if (rec.start) row.querySelector(".v-start").value = isoToLocalInput(rec.start);
+  if (rec.end) row.querySelector(".v-end").value = isoToLocalInput(rec.end);
+  row.querySelector(".icon-btn").addEventListener("click", () => row.remove());
+  $("#verify-rows").appendChild(row);
+}
+
+function fmtIsoShort(iso) {
+  return iso.slice(5, 16).replace("T", " ");
+}
+
+async function runVerify() {
+  const vid = state.verify.versionId;
+  if (!vid) {
+    setStatus("err", "请先选择要核验的版本");
+    return;
+  }
+  const rows = [...document.querySelectorAll("#verify-rows .verify-row")];
+  if (!rows.length) {
+    setStatus("err", "请至少录入一条实测记录");
+    return;
+  }
+  const records = [];
+  for (const row of rows) {
+    const tid = row.querySelector(".v-target").value;
+    const s = row.querySelector(".v-start").value;
+    const e = row.querySelector(".v-end").value;
+    if (!tid || !s || !e) {
+      setStatus("err", "每条记录都需填写目标与整分钟起止时间");
+      return;
+    }
+    records.push({ target_id: tid, start: s + "Z", end: e + "Z" });
+  }
+  setStatus("busy", "核验中…");
+  try {
+    const data = await api(`/api/versions/${vid}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ records }),
+    });
+    renderVerifyResult(data);
+    setStatus("ok", `核验完成：${data.summary.completed}/${data.summary.verified} 个目标达标`);
+  } catch (err) {
+    setStatus("err", err.message);
+  }
+}
+
+function renderVerifyResult(data) {
+  const card = $("#verify-card");
+  card.hidden = false;
+  $("#verify-summary").innerHTML =
+    `版本「${escapeHtml(data.version_label)}」 · 网格 ` +
+    `<code>${data.grid.start.replace("T", " ").replace("Z", "")} – ${data.grid.end.replace("T", " ").replace("Z", "")}</code> UTC · ` +
+    `采纳记录 <b>${data.records_accepted}</b> 条 · ` +
+    `达标 <b>${data.summary.completed}</b> / ${data.summary.verified} 个已核验目标`;
+
+  const tbody = $("#verify-table tbody");
+  tbody.innerHTML = "";
+  for (const r of data.results) {
+    const tr = document.createElement("tr");
+    let status;
+    if (r.record_count === 0) {
+      status = `<span class="badge">未录入</span>`;
+    } else if (r.complete) {
+      status = `<span class="badge auto">✅ 完成</span>`;
+    } else {
+      status = `<span class="badge fail">❌ 差 ${r.shortfall_minutes} 分钟</span>`;
+    }
+    const excl = r.excluded.length
+      ? `<ul class="excl-list">${r.excluded.map((x) =>
+          `<li><code>${fmtIsoShort(x.start)}–${fmtIsoShort(x.end)}</code>` +
+          `（${x.minutes} 分）${escapeHtml(x.reason)}</li>`).join("")}</ul>`
+      : (r.record_count ? "无" : "—");
+    const schedInfo = r.was_scheduled
+      ? `排程 ${fmtIsoShort(r.scheduled.start)}–${fmtIsoShort(r.scheduled.end)}`
+      : "原未排上";
+    tr.innerHTML = `
+      <td>${escapeHtml(r.name)}<div class="verify-sub">${escapeHtml(schedInfo)}</div></td>
+      <td>${r.planned_minutes}</td>
+      <td>${r.record_count ? r.actual_minutes : "—"}</td>
+      <td>${r.record_count ? r.effective_minutes : "—"}</td>
+      <td>${status}</td>
+      <td class="excl">${excl}</td>`;
+    tbody.appendChild(tr);
+  }
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 /* ================================================================ 模态框 */
@@ -859,6 +1010,10 @@ function init() {
     setStatus("ok", "已清除全部手动固定并重新自动排程");
   });
   $("#btn-refresh-versions").addEventListener("click", loadVersions);
+
+  $("#btn-add-vrec").addEventListener("click", () => addVerifyRow());
+  $("#btn-verify").addEventListener("click", runVerify);
+  $("#verify-version").addEventListener("change", onVerifyVersionChange);
 
   $("#btn-save").addEventListener("click", async () => {
     const label = await promptModal("保存版本", "版本名称（留空则使用时间戳）");

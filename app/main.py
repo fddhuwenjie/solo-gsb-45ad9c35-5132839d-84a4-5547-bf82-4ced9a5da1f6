@@ -13,6 +13,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from .planner import build_plan
 from .scheduling_utils import PlanError
+from .verify import verify_exposure
 
 DB_PATH = os.environ.get(
     "PLANNER_DB",
@@ -160,6 +161,35 @@ def delete_version(vid):
     if cur.rowcount == 0:
         return jsonify(error="版本不存在"), 404
     return jsonify(deleted=vid)
+
+
+# -------------------------------------------------------------------- verify
+@app.post("/api/versions/<vid>/verify")
+def verify_version(vid):
+    """实测曝光核验：以版本保存的排程为准核算实际观测时段，只读不改库。"""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, label, result FROM versions WHERE id = ?", (vid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return jsonify(error="版本不存在"), 404
+    try:
+        outcome = verify_exposure(json.loads(row["result"]), body)
+    except PlanError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(
+        {
+            "version_id": row["id"],
+            "version_label": row["label"],
+            **outcome,
+        }
+    )
 
 
 # -------------------------------------------------------------------- export
