@@ -136,6 +136,27 @@
         </table>
       </div>
     </div>
+
+    <div class="card" id="verify-card">
+      <div class="card-head">
+        <h2>实测曝光核验（对照已保存版本）</h2>
+        <div class="verify-actions">
+          <button class="btn small" id="btn-verify-fill" title="用该版本的原定排程填充实测记录">填入原定排程</button>
+          <button class="btn small" id="btn-verify-add">＋ 添加记录</button>
+          <button class="btn small primary" id="btn-verify-run">开始核验</button>
+        </div>
+      </div>
+      <label>核验版本
+        <select id="verify-version"><option value="">— 请选择已保存版本 —</option></select>
+      </label>
+      <div class="row-list verify-row-list" id="verify-rows"></div>
+      <div class="hint">
+        按 UTC <b>整分钟</b>录入实际观测起止（左闭右开）。同一目标的重叠记录只计一次；
+        不同目标实测相撞的分钟从双方扣除；与固定校准重叠或落在自身可行窗口外的分钟不计入有效时长；
+        有效分钟达到原定曝光时长即判定完成。核验为只读操作，不会改动已保存版本。
+      </div>
+      <div id="verify-results"></div>
+    </div>
   </section>
 </main>
 

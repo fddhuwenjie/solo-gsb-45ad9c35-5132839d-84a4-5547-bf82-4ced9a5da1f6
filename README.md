@@ -97,6 +97,26 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 - **导出 JSON**：下载自描述文件 `observation-schedule-YYYY-MM-DD.json`，
   顶层结构为 `{schema, generated_at, request, schedule}`，便于与其他系统对接。
 
+### 7. 实测曝光核验
+
+观测执行后，可对照任一**已保存版本**核验实际曝光是否达标（页面右侧
+「实测曝光核验」卡片，或 `POST /api/versions/<id>/verify`）：
+
+1. 在下拉框中选择要核验的版本（在版本列表点「载入」会自动同步选中）；
+2. 逐条录入 **目标 + UTC 整分钟起止** 的实际观测时段，也可点
+   「填入原定排程」一键带入该版本的排程再修改；
+3. 点击「开始核验」，页面逐目标列出：原定曝光时长、实测分钟、有效分钟、
+   被剔除的区间及原因，以及是否完成（有效 ≥ 原定即 ✅）。
+
+计时规则（全部左闭右开）：
+
+- 同一目标的重叠记录只计一次；
+- 不同目标实测相撞的分钟从**双方**同时扣除；
+- 再剔除与固定校准重叠、以及落在自身可行窗口外的分钟；
+- 偏离原排程但满足全部约束的实际曝光照常计入；原版本未排上的目标也可核验；
+- 未知目标、非整分钟、超出日期范围或起止倒置的记录会导致**整批报错**，
+  核验不执行；核验为只读操作，不会改动已保存版本。
+
 ---
 
 ## 🔭 计算方法（球面天文）
@@ -125,6 +145,7 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 | `POST` | `/api/versions` | `{label?, request}` 保存版本（服务端重算） |
 | `GET` | `/api/versions/<id>` | 取版本（含输入与结果） |
 | `DELETE` | `/api/versions/<id>` | 删除版本 |
+| `POST` | `/api/versions/<id>/verify` | 实测曝光核验（只读，见下） |
 | `GET` | `/healthz` | 健康检查 |
 
 请求示例：
@@ -152,6 +173,30 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 > `pins` 为可选的手动固定表：目标 id → 起始分钟（相对网格起点 00:00 UTC）；
 > 非法固定（越界、离开可行窗口、与其他时段重叠）会被服务端拒绝并返回 warning。
 
+### 实测核验接口
+
+`POST /api/versions/<id>/verify`，请求体：
+
+```json
+{
+  "records": [
+    {"target_id": "m31", "start": "2026-09-24T12:10Z", "end": "2026-09-24T12:55Z"},
+    {"target_id": "m31", "start": "2026-09-24T12:40Z", "end": "2026-09-24T13:05Z"}
+  ]
+}
+```
+
+- 以该版本保存的目标、可行窗口、校准时段与排程为准，按左闭右开逐分钟计：
+  同一目标重叠记录取并集（只计一次）→ 不同目标实测相撞部分双方扣除 →
+  剔除与固定校准重叠及落在自身可行窗口外的分钟，剩余为有效分钟。
+- 响应 `{version_id, label, grid, generated_at, summary, results}`；
+  `results` 逐目标给出 `planned_minutes`（原定曝光）、`measured_minutes`（实测）、
+  `effective_minutes`（有效）、`complete`（有效 ≥ 原定）、`scheduled`（原定排程，
+  未排上为 `null`）、`measured`/`effective`（区间明细）与
+  `excluded`（被剔除区间及 `reason`）。
+- 未知目标、非整分钟、范围外或倒置时段 → 整批 `400`；版本不存在 → `404`。
+  核验只读，不改动已保存版本。
+
 ---
 
 ## 📁 项目结构
@@ -162,6 +207,7 @@ PORT=8000 PLANNER_DB=./data/planner.db python -m app.main
 │   ├── astronomy.py        # 儒略日/GMST/太阳历书/赤道→地平/空气质量
 │   ├── scheduling_utils.py # 坐标与时间解析、区间运算
 │   ├── planner.py          # 逐分钟窗口求解 + 贪心排程 + 冲突归因
+│   ├── verification.py     # 实测曝光核验（对照已保存版本，只读）
 │   └── main.py             # Flask 路由、SQLite 版本持久化
 ├── static/
 │   ├── index.html          # 单页界面

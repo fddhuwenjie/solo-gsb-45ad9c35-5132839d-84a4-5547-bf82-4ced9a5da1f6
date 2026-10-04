@@ -749,6 +749,7 @@ async function loadVersions() {
       div.querySelector(".v-del").addEventListener("click", () => deleteVersion(v.id));
       box.appendChild(div);
     }
+    refreshVerifyVersionOptions(versions);
   } catch (err) {
     box.innerHTML = `<div class="empty-hint">版本加载失败：${escapeHtml(err.message)}</div>`;
   }
@@ -782,6 +783,12 @@ async function loadVersion(id) {
     applyRequest(v.request);
     state.result = v.result;
     renderAll();
+    // 核验面板同步选中该版本（清空旧版本的实测记录与结果）
+    vstate.versionId = id;
+    vstate.version = v;
+    $("#verify-version").value = id;
+    $("#verify-rows").innerHTML = "";
+    $("#verify-results").innerHTML = "";
     setStatus("ok", `已载入版本：${v.label}`);
   } catch (err) {
     setStatus("err", err.message);
@@ -794,6 +801,132 @@ async function deleteVersion(id) {
     await api(`/api/versions/${id}`, { method: "DELETE" });
     await loadVersions();
   } catch (err) {
+    setStatus("err", err.message);
+  }
+}
+
+/* ================================================================ 实测核验 */
+const vstate = {
+  versionId: "",      // 当前选中的核验版本 id
+  version: null,      // 该版本完整详情（含 result，只读使用）
+};
+
+function refreshVerifyVersionOptions(versions) {
+  const sel = $("#verify-version");
+  sel.innerHTML = `<option value="">— 请选择已保存版本 —</option>` +
+    versions.map((v) =>
+      `<option value="${v.id}">${escapeHtml(v.label)}（${v.created_at.slice(0, 16).replace("T", " ")}）</option>`
+    ).join("");
+  if (vstate.versionId && versions.some((v) => v.id === vstate.versionId)) {
+    sel.value = vstate.versionId;
+  } else {
+    sel.value = "";
+    vstate.versionId = "";
+    vstate.version = null;
+    $("#verify-rows").innerHTML = "";
+    $("#verify-results").innerHTML = "";
+  }
+}
+
+function addVerifyRow(rec) {
+  if (!vstate.version) {
+    setStatus("err", "请先在核验卡片中选择已保存版本");
+    return;
+  }
+  rec = rec || { target_id: "", start: "", end: "" };
+  const targets = vstate.version.result.targets || [];
+  const row = document.createElement("div");
+  row.className = "verify-row";
+  row.innerHTML = `
+    <select class="v-target">${targets.map((t) =>
+      `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join("")}</select>
+    <input class="v-start" type="datetime-local" step="60" title="开始（UTC 整分钟）" />
+    <input class="v-end" type="datetime-local" step="60" title="结束（UTC 整分钟）" />`;
+  const del = document.createElement("button");
+  del.className = "icon-btn";
+  del.title = "删除";
+  del.textContent = "✕";
+  del.addEventListener("click", () => row.remove());
+  row.appendChild(del);
+  if (rec.target_id) row.querySelector(".v-target").value = rec.target_id;
+  if (rec.start) row.querySelector(".v-start").value = isoToLocalInput(rec.start);
+  if (rec.end) row.querySelector(".v-end").value = isoToLocalInput(rec.end);
+  $("#verify-rows").appendChild(row);
+}
+
+async function selectVerifyVersion(id) {
+  vstate.versionId = id;
+  vstate.version = null;
+  $("#verify-rows").innerHTML = "";
+  $("#verify-results").innerHTML = "";
+  if (!id) return;
+  try {
+    vstate.version = await api(`/api/versions/${id}`);
+    setStatus("ok", `核验版本：${vstate.version.label}`);
+  } catch (err) {
+    setStatus("err", err.message);
+  }
+}
+
+const fmtIsoShort = (iso) => iso.slice(5, 16).replace("T", " ");
+
+function renderVerifyResults(data) {
+  const s = data.summary;
+  let html = `<div class="vres-summary">核验版本 <b>${escapeHtml(data.label)}</b>：` +
+    `<b>${s.target_count}</b> 个目标、<b>${s.record_count}</b> 条实测记录，` +
+    `<b>${s.complete_count}</b> 个达标、<b>${s.incomplete_count}</b> 个未达标` +
+    `（${data.generated_at} 核验，只读不改动版本）。</div>`;
+  for (const r of data.results) {
+    const ok = r.complete;
+    html += `<div class="vres-item${ok ? "" : " fail"}">` +
+      `<div class="vres-head">${ok ? "✅" : "❌"} <b>${escapeHtml(r.name)}</b>` +
+      `<span class="badge ${ok ? "done" : "miss"}">${ok ? "完成" : "未完成"}</span></div>` +
+      `<div class="vres-nums">原定曝光 <b>${r.planned_minutes}</b> 分 · ` +
+      `实测 <b>${r.measured_minutes}</b> 分（${r.record_count} 条记录）· ` +
+      `有效 <b>${r.effective_minutes}</b> 分 · ` +
+      (r.scheduled
+        ? `原定排程 <code>${fmtIsoShort(r.scheduled.start)}–${fmtIsoShort(r.scheduled.end)}</code>`
+        : `原版本未排上该目标`) +
+      `</div>`;
+    if (r.excluded.length) {
+      html += `<ul class="vres-excl">` + r.excluded.map((x) =>
+        `<li>剔除 <code>${fmtIsoShort(x.start)}–${fmtIsoShort(x.end)}</code>` +
+        `（${x.minutes} 分）：${escapeHtml(x.reason)}</li>`).join("") + `</ul>`;
+    }
+    html += `</div>`;
+  }
+  $("#verify-results").innerHTML = html;
+}
+
+async function runVerify() {
+  if (!vstate.versionId) {
+    setStatus("err", "请先选择要核验的已保存版本");
+    return;
+  }
+  const records = [];
+  for (const row of document.querySelectorAll("#verify-rows .verify-row")) {
+    records.push({
+      target_id: row.querySelector(".v-target").value,
+      start: localInputToIso(row.querySelector(".v-start").value),
+      end: localInputToIso(row.querySelector(".v-end").value),
+    });
+  }
+  if (!records.length) {
+    setStatus("err", "请至少添加一条实测记录");
+    return;
+  }
+  setStatus("busy", "核验中…");
+  try {
+    const data = await api(`/api/versions/${vstate.versionId}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ records }),
+    });
+    renderVerifyResults(data);
+    setStatus("ok",
+      `核验完成：${data.summary.complete_count}/${data.summary.target_count} 个目标达标`);
+  } catch (err) {
+    $("#verify-results").innerHTML =
+      `<div class="verify-error">❌ 核验被拒绝（整批未执行）：${escapeHtml(err.message)}</div>`;
     setStatus("err", err.message);
   }
 }
@@ -859,6 +992,25 @@ function init() {
     setStatus("ok", "已清除全部手动固定并重新自动排程");
   });
   $("#btn-refresh-versions").addEventListener("click", loadVersions);
+
+  // 实测曝光核验
+  $("#verify-version").addEventListener("change", (e) => selectVerifyVersion(e.target.value));
+  $("#btn-verify-add").addEventListener("click", () => addVerifyRow());
+  $("#btn-verify-fill").addEventListener("click", () => {
+    if (!vstate.version) {
+      setStatus("err", "请先选择要核验的已保存版本");
+      return;
+    }
+    const sched = vstate.version.result.scheduled || [];
+    $("#verify-rows").innerHTML = "";
+    for (const s of sched) {
+      addVerifyRow({ target_id: s.target_id, start: s.start, end: s.end });
+    }
+    setStatus(sched.length ? "ok" : "err",
+      sched.length ? `已填入 ${sched.length} 条原定排程，可直接核验或修改`
+                   : "该版本没有已安排的观测时段");
+  });
+  $("#btn-verify-run").addEventListener("click", runVerify);
 
   $("#btn-save").addEventListener("click", async () => {
     const label = await promptModal("保存版本", "版本名称（留空则使用时间戳）");

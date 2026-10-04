@@ -231,6 +231,46 @@ td code { font-family: ui-monospace, Consolas, monospace; color: #aab8ee; }
 .unsched-item .why { color: var(--muted); margin-top: 3px; line-height: 1.5; }
 .empty-hint { color: var(--muted); font-size: 13px; padding: 8px 2px; }
 
+/* ---------------------------------------------------------- verification */
+.verify-actions { display: flex; gap: 6px; }
+.verify-row-list { max-height: 220px; }
+.verify-row {
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 6px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px; align-items: center;
+}
+.verify-row select, .verify-row input { padding: 6px; font-size: 12px; }
+.verify-row input[type="datetime-local"] { color-scheme: dark; }
+#verify-results { margin-top: 10px; }
+.vres-summary { font-size: 13px; color: var(--muted); margin-bottom: 8px; line-height: 1.6; }
+.vres-summary b { color: var(--text); }
+.vres-item {
+  border-left: 3px solid var(--accent-2);
+  background: rgba(55, 208, 160, .07);
+  padding: 8px 12px;
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.vres-item.fail { border-left-color: var(--danger); background: rgba(255, 107, 107, .07); }
+.vres-item .vres-head { display: flex; align-items: center; gap: 8px; }
+.vres-item .vres-nums { color: var(--muted); margin-top: 3px; line-height: 1.6; }
+.vres-item .vres-nums b { color: var(--text); }
+.vres-item .vres-nums code { color: #aab8ee; }
+.vres-excl { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.vres-excl li { margin: 2px 0; line-height: 1.5; }
+.vres-excl code { color: #aab8ee; }
+.badge.done { background: #1d3128; color: var(--accent-2); border: 1px solid #2e6b58; }
+.badge.miss { background: #3a1d1d; color: var(--danger); border: 1px solid #7a3030; }
+.verify-error {
+  border-left: 3px solid var(--danger);
+  background: rgba(255, 107, 107, .07);
+  padding: 8px 12px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  color: #ffc9c9;
+}
+
 /* -------------------------------------------------------------- tooltip */
 .tooltip {
   position: fixed;
