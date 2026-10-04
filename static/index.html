@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>天文观测窗口规划台</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🔭</span>
+    <div>
+      <h1>天文观测窗口规划台</h1>
+      <small>球面天文逐分钟求解 · 不重叠排程 · 可拖动调整 · 版本管理</small>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="status" class="status idle">就绪</span>
+    <button id="btn-recompute" class="btn primary">重新计算</button>
+    <button id="btn-clear-pins" class="btn" title="清除所有手动拖动产生的固定时段">清除固定</button>
+    <button id="btn-save" class="btn">保存版本</button>
+    <button id="btn-export" class="btn">导出 JSON</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ============================ 左侧：输入面板 ============================ -->
+  <aside class="sidebar">
+    <section class="card">
+      <h2>观测点</h2>
+      <div class="grid-2">
+        <label>纬度 (°)
+          <input id="site-lat" type="text" value="30.0" placeholder="-90 ~ 90，支持 N/S" />
+        </label>
+        <label>经度 (°)
+          <input id="site-lon" type="text" value="120.0" placeholder="-180 ~ 180，支持 E/W" />
+        </label>
+      </div>
+      <h2 style="margin-top:14px">UTC 日期范围</h2>
+      <div class="grid-2">
+        <label>开始日期 <input id="start-date" type="date" /></label>
+        <label>结束日期 <input id="end-date" type="date" /></label>
+      </div>
+      <h2 style="margin-top:14px">观测约束</h2>
+      <label>夜间 / 暮光条件
+        <select id="twilight-mode">
+          <option value="night">黑夜（太阳 &lt; −18°）</option>
+          <option value="astronomical" selected>天文晨昏蒙影（太阳 &lt; −12°）</option>
+          <option value="nautical">航海晨昏蒙影（太阳 &lt; −6°）</option>
+          <option value="civil">民用晨昏蒙影（太阳 &lt; 0°）</option>
+        </select>
+      </label>
+      <div class="grid-2">
+        <label>最低高度 (°) <input id="min-alt" type="number" value="20" min="0" max="90" step="1" /></label>
+        <label>最大空气质量 <input id="max-x" type="number" value="2.5" min="1" step="0.1" /></label>
+      </div>
+      <div id="effective-hint" class="hint"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>观测目标</h2>
+        <button class="btn small" id="btn-add-target">＋ 添加</button>
+      </div>
+      <div class="row-list" id="target-rows"></div>
+      <div class="hint">赤经支持 <code>00h42m44s</code>、时角小数或度数（&gt;24 自动识别）；赤纬支持 <code>41d16m</code> 或十进制。优先级数字越小越优先。</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>固定校准时段</h2>
+        <button class="btn small" id="btn-add-cal">＋ 添加</button>
+      </div>
+      <div class="row-list" id="cal-rows"></div>
+      <div class="hint">校准时段为强制保留时段，不会被观测占用；时间一律按 UTC 解释。</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>已保存版本</h2>
+        <button class="btn small" id="btn-refresh-versions">刷新</button>
+      </div>
+      <div id="version-list" class="version-list"></div>
+    </section>
+  </aside>
+
+  <!-- ============================ 右侧：结果区 ============================ -->
+  <section class="content">
+    <div id="warnings" class="warnings" hidden></div>
+
+    <div class="card timeline-card">
+      <div class="card-head">
+        <h2>时间线（拖动色块调整观测时段，拖右边缘可改曝光时长）</h2>
+        <div class="legend">
+          <span><i class="sw night"></i>黑夜</span>
+          <span><i class="sw astro"></i>天文</span>
+          <span><i class="sw naut"></i>航海</span>
+          <span><i class="sw civil"></i>民用</span>
+          <span><i class="sw win"></i>可行窗口</span>
+          <span><i class="sw cal"></i>校准</span>
+        </div>
+      </div>
+      <div id="timeline-scroll" class="timeline-scroll">
+        <svg id="timeline" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+      <div class="hint" id="drag-hint"></div>
+    </div>
+
+    <div class="card">
+      <h2>未安排目标及首个冲突原因</h2>
+      <div id="unscheduled-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>已安排观测序列（UTC）</h2>
+      <div class="table-wrap">
+        <table id="schedule-table">
+          <thead>
+            <tr>
+              <th>#</th><th>目标</th><th>开始 (UTC)</th><th>结束 (UTC)</th>
+              <th>时长(分)</th><th>优先级</th><th>状态</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>校准时段（UTC）</h2>
+      <div class="table-wrap">
+        <table id="cal-table">
+          <thead><tr><th>名称</th><th>开始 (UTC)</th><th>结束 (UTC)</th><th>时长(分)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<div id="modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal">
+    <h3 id="modal-title">保存版本</h3>
+    <input id="modal-input" type="text" placeholder="请输入版本名称（可选）" />
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">取消</button>
+      <button class="btn primary" id="modal-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
